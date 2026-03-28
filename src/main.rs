@@ -28,7 +28,7 @@ use crate::context::ContextBuilder;
 use crate::github::fetch_github_graph;
 
 fn select_start_nodes(graph: &crate::graph::Graph) -> Vec<crate::types::NodeId> {
-    let mut nodes: Vec<crate::types::NodeId> = graph.adj_out.keys().copied().collect();
+    let mut nodes: Vec<_> = graph.adj_out.keys().copied().collect();
     if nodes.is_empty() { return vec![]; }
 
     let mut starts = Vec::new();
@@ -38,20 +38,6 @@ fn select_start_nodes(graph: &crate::graph::Graph) -> Vec<crate::types::NodeId> 
     }
 
     if let Some(&id) = nodes.iter().max_by_key(|&&id| graph.out_degree.get(&id).unwrap_or(&0)) {
-        if !starts.contains(&id) { starts.push(id); }
-    }
-
-    nodes.sort_by_key(|&id| std::cmp::Reverse(
-        graph.in_degree.get(&id).unwrap_or(&0) + graph.out_degree.get(&id).unwrap_or(&0)
-    ));
-
-    let top_count = (nodes.len() as f32 * 0.2).max(1.0) as usize;
-    let top_nodes = &nodes[..top_count.min(nodes.len())];
-
-    use rand::seq::SliceRandom;
-    let mut rng = rand::thread_rng();
-
-    if let Some(&id) = top_nodes.choose(&mut rng) {
         if !starts.contains(&id) { starts.push(id); }
     }
 
@@ -75,13 +61,16 @@ async fn main() {
 
     use std::env;
 
-    let port = env::var("PORT").unwrap_or("9001".to_string());
-    let addr = format!("0.0.0.0:{}", port);
+    // ===== PORT SETUP =====
+    let base_port: u16 = env::var("PORT")
+        .unwrap_or("9001".to_string())
+        .parse()
+        .unwrap();
 
-    // ================== 🔥 FIX START ==================
-    // HTTP server for Railway (prevents 502)
-    let http_port: u16 = port.parse().unwrap();
+    let http_port = base_port;
+    let ws_port = base_port + 1;
 
+    // ===== HTTP SERVER (FIXES 502) =====
     let health = warp::path::end()
         .map(|| "ARIS backend is running 🚀");
 
@@ -90,13 +79,15 @@ async fn main() {
             .run(([0, 0, 0, 0], http_port))
             .await;
     });
-    // ================== 🔥 FIX END ==================
 
-    let listener = TcpListener::bind(&addr)
+    // ===== WEBSOCKET SERVER =====
+    let ws_addr = format!("0.0.0.0:{}", ws_port);
+
+    let listener = TcpListener::bind(&ws_addr)
         .await
-        .expect("❌ Failed to bind");
+        .expect("❌ Failed to bind WS");
 
-    println!("✅ Server running on ws://{}", addr);
+    println!("✅ WebSocket running on ws://{}", ws_addr);
 
     while let Ok((stream, _)) = listener.accept().await {
         let state_clone = shared_state.clone();
