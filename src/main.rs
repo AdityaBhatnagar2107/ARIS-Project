@@ -27,29 +27,40 @@ use crate::github::fetch_github_graph;
 fn select_start_nodes(graph: &crate::graph::Graph) -> Vec<crate::types::NodeId> {
     let mut nodes: Vec<crate::types::NodeId> = graph.adj_out.keys().copied().collect();
     if nodes.is_empty() { return vec![]; }
+
     let mut starts = Vec::new();
+
     if let Some(&id) = nodes.iter().max_by_key(|&&id| graph.in_degree.get(&id).unwrap_or(&0)) {
         starts.push(id);
     }
+
     if let Some(&id) = nodes.iter().max_by_key(|&&id| graph.out_degree.get(&id).unwrap_or(&0)) {
         if !starts.contains(&id) { starts.push(id); }
     }
+
     nodes.sort_by_key(|&id| std::cmp::Reverse(
         graph.in_degree.get(&id).unwrap_or(&0) + graph.out_degree.get(&id).unwrap_or(&0)
     ));
+
     let top_count = (nodes.len() as f32 * 0.2).max(1.0) as usize;
     let top_nodes = &nodes[..top_count.min(nodes.len())];
+
     use rand::seq::SliceRandom;
     let mut rng = rand::thread_rng();
+
     if let Some(&id) = top_nodes.choose(&mut rng) {
         if !starts.contains(&id) { starts.push(id); }
     }
+
     starts
 }
 
 #[tokio::main]
 async fn main() {
+    // ✅ LOAD ENV VARIABLES
     dotenv::dotenv().ok();
+
+   
     println!("A.R.I.S. Deterministic Graph Code Intelligence System is Active.");
 
     let shared_state = Arc::new(RwLock::new(GraphState::new()));
@@ -61,7 +72,10 @@ async fn main() {
         run_event_pipeline(event_rx, pipeline_state).await;
     });
 
-    let listener = TcpListener::bind("127.0.0.1:9001").await.expect("Failed to bind port 9001");
+    let listener = TcpListener::bind("0.0.0.0:9001")
+        .await
+        .expect("Failed to bind port 9001");
+
     println!("ARIS backend listening on ws://127.0.0.1:9001");
 
     while let Ok((stream, _addr)) = listener.accept().await {
@@ -108,7 +122,7 @@ async fn main() {
 
                     let mut gs = state_clone.write().await;
                     let mut int = interner_clone.write().await;
-                    
+
                     gs.graph = crate::graph::Graph::new();
                     *int = Interner::new();
 
@@ -134,51 +148,53 @@ async fn main() {
                         let resp = json!({"type": "graph", "nodes": p.nodes, "edges": p.edges}).to_string();
                         let _ = write.send(Message::Text(resp)).await;
                     }
+
                 } else if msg_type == "query" {
                     let question = parsed.get("question").and_then(|q| q.as_str()).unwrap_or("");
+
                     let gs = state_clone.read().await;
                     let int = interner_clone.read().await;
 
                     if gs.graph.adj_out.is_empty() { continue; }
 
                     let starts = select_start_nodes(&gs.graph);
+
                     let mut merged_nodes = std::collections::HashSet::new();
                     let mut merged_edges = Vec::new();
-                    
+
                     for start_id in starts {
                         let subgraph = extract_bounded_subgraph(&gs.graph, start_id);
                         merged_nodes.extend(subgraph.nodes);
                         merged_edges.extend(subgraph.edges);
                     }
-                    
+
                     let merged_subgraph = crate::traversal::Subgraph {
                         nodes: merged_nodes,
                         edges: merged_edges,
                     };
 
-                    let context = ContextBuilder::new(&*int, 8000).build(&gs.graph, &merged_subgraph);
-                    
-                    // CALLING LLM.RS
-                    // Use the absolute path to be 100% sure
-                    // Use the specific safe path
-                    match ai::ask_ai(context, question.to_string()).await {
+                    let context = ContextBuilder::new(&*int, 8000)
+                        .build(&gs.graph, &merged_subgraph);
+
+                    match ai::ask_gemini(context, question.to_string()).await {
                         Ok(answer) => {
                             let highlighted: Vec<u32> = merged_subgraph.nodes.iter().copied().collect();
+
                             let resp = json!({
                                 "type": "answer",
                                 "answer": answer,
                                 "highlighted_nodes": highlighted,
                             }).to_string();
+
                             let _ = write.send(Message::Text(resp)).await;
                         }
                         Err(e) => {
-                            // Turn the error into a string IMMEDIATELY 
-                            // This drops the 'non-Send' error before the next .await
-                            let err_msg = e.to_string(); 
-                            let _ = write.send(Message::Text(json!({ 
-                                "type": "error", 
-                                "message": err_msg 
-                            }).to_string())).await;
+                            let error_payload = json!({
+                                "type": "error",
+                                "message": e.to_string()
+                            }).to_string();
+
+                            let _ = write.send(Message::Text(error_payload)).await;
                         }
                     }
                 }

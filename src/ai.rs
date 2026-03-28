@@ -1,46 +1,55 @@
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::json;
 
-pub async fn ask_ai(context: String, question: String) -> Result<String, Box<dyn std::error::Error + Send + Sync + 'static>> {
-    // HARDCODED KEY: No more environment variable errors
-    let clean_key = "AIzaSyA7aHVVKZLhXi7fJl3ha5cEMRcxrQNHVaA";
-    
-    let client = Client::new();
+pub async fn ask_gemini(
+    context: String,
+    question: String,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
 
-    let prompt_text = format!(
-        "You are A.R.I.S, a codebase intelligence tool. Use the following context to answer.\n\nContext:\n{}\n\nQuestion: {}",
-        context, question
-    );
+    // 🔐 USE ENV KEY (safe)
+    let api_key = std::env::var("GOOGLE_API_KEY")
+        .expect("Set GOOGLE_API_KEY first");
 
-   // VERSION 1 STABLE: This is the most reliable endpoint
+    // ⚡ FAST CLIENT
+    let client = Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    // 🚀 FAST MODEL
     let url = format!(
         "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={}",
-        clean_key
+        api_key
     );
 
-    let response = client
-        .post(&url)
-        .header("Content-Type", "application/json")
-        .json(&json!({
-            "contents": [{
-                "parts": [{
-                    "text": prompt_text
-                }]
-            }]
-        }))
-        .send()
-        .await?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("API Error {}: {}", status, error_body).into());
-    }
+    // ⚡ LIMIT CONTEXT (VERY IMPORTANT)
+    let trimmed_context: String = context.chars().take(1200).collect();
 
-    let body: Value = response.json().await?;
-    
-    let text = body["candidates"][0]["content"]["parts"][0]["text"]
+    let prompt = format!(
+        "You are A.R.I.S.\n\nContext:\n{}\n\nQuestion:\n{}\n\nAnswer in 3-4 lines, technical.",
+        trimmed_context, question
+    );
+
+    let body = json!({
+        "contents": [{
+            "parts": [{ "text": prompt }]
+        }]
+    });
+
+    // ===== API CALL =====
+    let res = client.post(&url).json(&body).send().await?;
+
+    let raw = res.text().await?;
+    println!("RAW: {}", raw);
+
+    // ===== PARSE =====
+    let v: serde_json::Value = serde_json::from_str(&raw)?;
+
+    let answer = v["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .ok_or("Failed to parse Gemini response text")?;
+        .unwrap_or("No response from AI.")
+        .to_string();
 
-    Ok(text.to_string())
+    println!("ANSWER: {}", answer);
+
+    Ok(answer)
 }
