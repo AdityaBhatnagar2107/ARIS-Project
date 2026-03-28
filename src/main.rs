@@ -1,3 +1,5 @@
+use warp::Filter;
+
 mod ai;
 pub mod types;
 pub mod interner;
@@ -71,11 +73,24 @@ async fn main() {
         run_event_pipeline(event_rx, pipeline_state).await;
     });
 
-    // ✅ IMPORTANT FIX (Railway compatible)
     use std::env;
 
     let port = env::var("PORT").unwrap_or("9001".to_string());
     let addr = format!("0.0.0.0:{}", port);
+
+    // ================== 🔥 FIX START ==================
+    // HTTP server for Railway (prevents 502)
+    let http_port: u16 = port.parse().unwrap();
+
+    let health = warp::path::end()
+        .map(|| "ARIS backend is running 🚀");
+
+    tokio::spawn(async move {
+        warp::serve(health)
+            .run(([0, 0, 0, 0], http_port))
+            .await;
+    });
+    // ================== 🔥 FIX END ==================
 
     let listener = TcpListener::bind(&addr)
         .await
