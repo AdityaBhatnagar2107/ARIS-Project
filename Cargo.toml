@@ -16,3 +16,6 @@ regex = "1"
 base64 = "0.22"
 dotenv = "0.15"
 rand = "0.8"
+
+# ✅ ADD THIS (CRITICAL FIX)
+warp = "0.3"
